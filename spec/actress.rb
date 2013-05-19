@@ -22,6 +22,16 @@ end
 
 Thread.abort_on_exception = true
 
+describe Set do
+  it do
+    set = Set.new
+    set.add 1
+    refute set.empty?
+    assert set.shift == 1
+  end
+end
+
+
 describe 'actress' do
   i_suck_and_my_tests_are_order_dependent!
 

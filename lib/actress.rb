@@ -17,8 +17,8 @@
 # DONE add SharedExecutor based on normal actors
 # DONE supervise by parent by default
 # DONE add on_error
+# TODO execute callbacks (on_*) in safe block report failures to parent
 # TODO garbage collectable actors
-# TODO hooks only!: preStart, postStop, preRestart, postRestart
 # TODO mailbox with stash
 # TODO become syntax for complex behavior, store invalid messages, https://gist.github.com/viktorklang/797035
 
@@ -35,7 +35,7 @@ require 'logging'
 class Set
   def shift
     return nil if empty?
-    @hash.shift[0] # FIXME will this work on JRuby?
+    @hash.shift[0]
   end
 end
 
@@ -152,11 +152,9 @@ module Actress
 
     def message(message, sync)
       future = (sync ? Future.new : Core::NoFuture)
-      core.mailbox.push Core::Letter[message,
-                                     future,
-                                     Actress.current || Core::NoSender]
-      core.notify_new_message if core
-
+      core.incoming Core::Letter[message,
+                                 future,
+                                 Actress.current || Core::NoSender]
       return future || self
     end
 
@@ -173,7 +171,7 @@ module Actress
   end
 
   class Reference < AbstractReference
-    (State.names.map { |s| :"#{s}?" } + [:start, :stop, :pause, :resume]).each do |method|
+    (State.names.map { |s| :"#{s}?" } + [:start, :stop, :pause, :resume, :terminate]).each do |method|
       define_method method do |*args|
         core.public_send method, *args
       end
@@ -186,22 +184,27 @@ module Actress
     extend Algebrick::Matching
     include Algebrick::Matching
 
-    attr_reader :reference, :current_message, :world, :parent, :name, :path, :state, :children, :monitors,
+    attr_reader :reference, :current_letter, :world, :parent, :name, :path, :state, :children, :monitors,
                 :actor, :logger, :mailbox
-    private :current_message
+    private :current_letter
 
     NoFuture    = Algebrick::Atom.new
     MaybeFuture = Algebrick::Variant.new NoFuture, Future
     NoSender    = Algebrick::Atom.new
     Sender      = Algebrick::Variant.new NoSender, AbstractReference
     Letter      = Algebrick::Product.new message: Object, future: MaybeFuture, sender: Sender
-    Failed      = Algebrick::Product.new actor: AbstractReference, message: Object, error: Exception
-    StateUpdate = Algebrick::Product.new actor: AbstractReference, old: State, new: State
+
+    BadMessage     = Algebrick::Product.new Object
+    Initialization = Algebrick::Atom.new
+    Reason         = Algebrick::Variant.new BadMessage, Initialization
+    Failed         = Algebrick::Product.new actor: AbstractReference, reason: Reason, error: Exception
+    StateUpdate    = Algebrick::Product.new actor: AbstractReference, old: State, new: State
 
     Shared   = Algebrick::Atom.new
+    Shared2  = Algebrick::Atom.new
     Threaded = Algebrick::Atom.new
     Default  = Algebrick::Atom.new
-    Type     = Algebrick::Variant.new Shared, Threaded, Default
+    Type     = Algebrick::Variant.new Shared, Shared2, Threaded, Default
 
     module Letter
       def sender_path
@@ -215,39 +218,38 @@ module Actress
       super(world, options, &actor_initializer).reference
     end
 
-    DEFAULT_OPTIONS = { type: Default, reference_class: AbstractReference }
+    DEFAULT_OPTIONS = { type: Shared, reference_class: Reference }
 
     def initialize(world, options = {}, &actor_initializer)
       options = DEFAULT_OPTIONS.merge options
 
-      @name            = is_matching! options[:name], String
-      @world           = is_matching! world, World
-      @executor        = match options[:type],
-                               (Shared | Default) >>-> { world.shared_executor },
-                               Threaded >>-> { world.threaded_executor }
-      @mailbox         = Mailbox.new
-      @actor           = nil
-      @initializer     = actor_initializer
-      @current_message = nil
+      @name           = is_matching! options[:name], String
+      @world          = is_matching! world, World
+      @executor       = match options[:type],
+                              (Shared2 | Default) >>-> { world.shared_executor2 },
+                              Shared >>-> { world.shared_executor },
+                              Threaded >>-> { world.threaded_executor }
+      @mailbox        = Mailbox.new
+      @actor          = nil
+      @initializer    = actor_initializer
+      @current_letter = nil
 
       is_kind_of!(options[:reference_class], Class)
       options[:reference_class] <= AbstractReference or raise TypeError
       @reference     = options[:reference_class].send(:new, self)
       @message_count = 0
 
-      # TODO use normal Reference
-      @parent        = is_matching!(if options[:is_root]
-                                      reference
-                                    else
-                                      Actress.current || world.user
-                                    end, AbstractReference)
+      @parent = is_matching!(if options[:is_root]
+                               reference
+                             else
+                               Actress.current || world.user
+                             end, AbstractReference)
 
       @path      = if options[:is_root]
                      name
                    else
                      "#{parent.core.path}::#{name}"
                    end
-      # TODO use actor.class instead of self.class
       @logger    = options[:logger] || Logging.logger["Actress::#{path}"]
       @children  = []
 
@@ -307,8 +309,9 @@ module Actress
       execute :execute_delete_monitor, [actor]
     end
 
-    def notify_new_message
-      execute :execute_notify_new_message
+    def incoming(letter)
+      mailbox.push letter
+      execute :execute_schedule_receive
       reference
     end
 
@@ -338,11 +341,16 @@ module Actress
 
     def execute_start
       if stopped?
-        # FIXME it will go to FATAL error when initializer fails, catch it!
-        @actor     = is_matching! @initializer.call(reference), AbstractActor
-        self.state = Started
-        execute_schedule_mailbox_check
+        actor_instance = begin
+          @initializer.call(reference)
+        rescue => error
+          report_failure Failed[reference, Initialization, error]
+          return false
+        end
+        @actor         = is_matching! actor_instance, AbstractActor
+        self.state     = Started
         @actor.on_start
+        execute_schedule_receive
         true
       else
         false
@@ -351,9 +359,9 @@ module Actress
 
     def execute_stop
       if started? || paused?
-        @actor.on_stop
-        @actor     = nil
         self.state = Stopped
+        @actor.on_stop
+        @actor = nil
         true
       else
         false
@@ -364,7 +372,7 @@ module Actress
       execute_stop and
           if stopped?
             self.state = Terminated
-            @executor.terminate reference # FIXME it will kill thread under the actor, this will never return?
+            execute { @executor.terminate reference }
             true
           else
             false
@@ -407,22 +415,17 @@ module Actress
       children << child
     end
 
-    def execute_notify_new_message
-      @message_count += 1
-      execute_schedule_mailbox_check
-    end
-
-    def execute_schedule_mailbox_check
-      if !@mailbox_check_scheduled && started? && waiting_messages?
-        @mailbox_check_scheduled = true
+    def execute_schedule_receive
+      if !@receive_scheduled && started? && waiting_messages?
+        @receive_scheduled = true
         execute :execute_receive
       end
     end
 
     def execute_receive
       receive if started?
-      @mailbox_check_scheduled = false
-      execute_schedule_mailbox_check
+      @receive_scheduled = false
+      execute_schedule_receive
     end
 
     def state=(state)
@@ -433,35 +436,64 @@ module Actress
     end
 
     def waiting_messages?
-      @message_count > 0
+      not mailbox.empty?
     end
 
     def receive
-      set_current_message do |raw_message|
+      set_current_letter do |letter|
         begin
-          body, future, _ = *raw_message
-          logger.debug "from '#{raw_message.sender_path}' received '#{body}'"
-          result = match body,
-                         Failed.case { @actor.on_error(*body) },
-                         any.case { @actor.on_message(body) }
+          message, future, _ = *letter
+          logger.debug "from '#{letter.sender_path}' received '#{message}'"
+          result = match message,
+                         Failed.case { @actor.on_error(message) },
+                         any.case { @actor.on_message(message) }
 
           future.set result if Future === future
         rescue => error
           logger.error error
-          @parent.tell Failed[reference, body, error]
+          report_failure Failed[reference, BadMessage[message], error]
           execute_pause
         end
       end
       nil
     end
 
-    def set_current_message
-      message          = mailbox.pop
-      @message_count   -= 1
-      @current_message = message
+    def set_current_letter
+      message         = mailbox.pop
+      @message_count  -= 1
+      @current_letter = message
       yield message
     ensure
-      @current_message = nil
+      @current_letter = nil
+    end
+
+    def report_failure(failure)
+      @parent.tell is_matching!(failure, Failed)
+    end
+  end
+
+  class MicroActor
+    include Algebrick::TypeCheck
+    include Algebrick::Matching
+
+    def initialize
+      @mailbox = Queue.new
+      @logger  = Logging.logger[self.class]
+      @thread  = Thread.new { loop { receive } }
+    end
+
+    def <<(message)
+      @mailbox << message
+    end
+
+    def receive
+      on_message @mailbox.pop
+    rescue Exception => error
+      @logger.fatal "#{error.message} (#{error.class})\n#{error.backtrace * "\n"}"
+    end
+
+    def on_message(message)
+      raise NotImplementedError
     end
   end
 
@@ -479,8 +511,8 @@ module Actress
       unrecognized
     end
 
-    def on_error(actor, message, error)
-      actor.core.restart
+    def on_error(failure)
+      failure[:actor].core.restart
     end
 
     def reference
@@ -491,12 +523,16 @@ module Actress
       core.world
     end
 
+    def logger
+      core.logger
+    end
+
     def on_start
     end
 
     def on_stop
       core.children.each { |ch| ch.core.terminate }
-      # FIXME clean children
+      core.children.clear
     end
 
     def on_pause
@@ -508,13 +544,13 @@ module Actress
     end
 
     def unrecognized
-      raise UnknownMessage.new(current_message)
+      raise UnknownMessage.new(current_letter)
     end
 
     private
 
-    def current_message
-      core.current_message
+    def current_letter
+      core.current_letter
     end
   end
 
@@ -529,14 +565,14 @@ module Actress
     end
   end
 
-  class World # TODO make an actor
+  class World # FIND make an actor?
     class SystemActor < AbstractActor
 
       protected
 
       def unrecognized
-        logger.error "from #{current_message.sender_path} unrecognized message #{current_message.body}"
-        #puts "ERROR root received #{current_message.body.inspect} from #{current_message.sender}"
+        logger.error "from #{current_letter.sender_path} unrecognized message #{current_letter.body}"
+        #puts "ERROR root received #{current_letter.body.inspect} from #{current_letter.sender}"
       end
     end
 
@@ -562,9 +598,9 @@ module Actress
         end
       end
 
-      def on_error(actor, message, error)
-        if actor == reference
-          logger.error 'root has failed'
+      def on_error(failure)
+        if failure[:actor] == reference
+          logger.fatal 'root has failed'
         else
           super
         end
@@ -584,11 +620,8 @@ module Actress
       def initialize
         super
         #@logger = world.run(name: 'logger') { Logger.new }
-        @shared_executor = world.run(name:            'shared_executor',
-                                     type:            Core::Threaded,
-                                     reference_class: SharedExecutorReference) do
-          SharedExecutor.new world.pool_size
-        end
+        @shared_executor  = SharedExecutor.new world
+        @shared_executor2 = SharedExecutor2.new world
         # TODO dead letter mailbox
       end
 
@@ -603,6 +636,8 @@ module Actress
           #  @logger
         when :shared_executor
           @shared_executor
+        when :shared_executor2
+          @shared_executor2
         else
           unrecognized
         end
@@ -647,8 +682,8 @@ module Actress
 
       def execute(actor, &work)
         is_matching! actor, AbstractReference
-        @queues[actor]  ||= Queue.new
-        @threads[actor] ||= Thread.new { executing(actor) }
+        @queues[actor]  ||= queue = Queue.new
+        @threads[actor] ||= Thread.new { executing(queue) }
         @queues[actor] << work
         self
       end
@@ -665,20 +700,16 @@ module Actress
 
       private
 
-      def executing(actor)
-        loop { @queues[actor].pop.call }
+      def executing(queue)
+        loop { queue.pop.call }
+          # FIXME para this sometimes blows up on <NoMethodError> undefined method `pop' for nil:NilClass
       rescue => error
         @logger.fatal error
       end
     end
 
-    class SharedExecutorReference < AbstractReference
-      def execute(actor, &work)
-        tell SharedExecutor::NewWork[actor, work]
-      end
-    end
-
-    class SharedExecutor < AbstractActor
+    class SharedExecutor2
+      include AbstractExecutor
       class WorkStash
         def initialize
           @stash = Hash.new { |hash, key| hash[key] = [] }
@@ -689,15 +720,153 @@ module Actress
         end
 
         def pop(actor)
-          @stash[actor].pop.tap { |work| @stash.delete(actor) if work.nil? }
-        end
-
-        def empty?(actor = nil)
-          @stash.has_key?(actor)
+          @stash[actor].pop.tap { |work| @stash.delete(actor) if @stash[actor].empty? }
         end
 
         def present?(actor)
-          !empty?(actor)
+          @stash.has_key?(actor)
+        end
+
+        def empty?(actor)
+          !present?(actor)
+        end
+
+        def each
+          @stash.each do |actor, works|
+            yield actor, works
+          end
+        end
+      end
+
+      Work     = Algebrick::Product.new actor: AbstractReference, work: Proc
+      Finished = Algebrick::Product.new actor: AbstractReference, result: Object, worker: MicroActor
+      Message  = Algebrick::Variant.new Work, Finished
+
+      class Worker < MicroActor
+        def initialize(executor)
+          @executor = is_kind_of! executor, MicroActor
+          super()
+        end
+
+        def on_message(message)
+          match message,
+                Work.(~any, ~any) --> actor, work do
+                  @executor << Finished[actor, work.call, self]
+                end
+        end
+      end
+
+      class Dispatcher < MicroActor
+        def initialize(size)
+          @size           = size
+          @active_actors  = Set.new
+          @waiting_actors = Set.new
+          @work_stash     = SharedExecutor::WorkStash.new
+          @free_workers   = Array.new(size) { |i| Worker.new self }
+          super()
+        end
+
+        def on_message(message)
+          #invariant!
+          match message,
+                Finished.(~any, _, ~any) --> actor, worker do
+                  @free_workers << worker
+                  @active_actors.delete actor
+                  @waiting_actors.add actor if @work_stash.present?(actor)
+
+                  assign_work
+                end,
+                Work.(~any, ~any) --> actor, work do
+                  @waiting_actors.add actor unless @active_actors.include? actor
+                  @work_stash.push actor, work
+
+                  assign_work
+                end
+          #invariant!
+        end
+
+        private
+
+        def assign_work
+          while worker_available? && !@waiting_actors.empty?
+            @active_actors.add(actor = @waiting_actors.shift)
+            @free_workers.pop << Work[actor, @work_stash.pop(actor)]
+          end
+        end
+
+        def worker_available?
+          not @free_workers.empty?
+        end
+
+        def invariant!
+          unless (@active_actors & @waiting_actors).empty?
+            raise
+          end
+          unless !worker_available? || @waiting_actors.empty?
+            raise
+          end
+          @waiting_actors.each do |actor|
+            unless @work_stash.present?(actor)
+              raise
+            end
+          end
+          @work_stash.each do |actor, works|
+            unless @active_actors.include?(actor) || @waiting_actors.include?(actor)
+              raise
+            end
+          end
+        end
+      end
+
+      attr_reader :size
+
+      def initialize(world)
+        @size       = world.pool_size
+        @dispatcher = Dispatcher.new size
+      end
+
+      def execute(actor, &work)
+        @dispatcher << Work[actor, work]
+        self
+      end
+
+      def terminate(actor)
+      end
+    end
+
+    class SharedExecutor
+      Work     = Algebrick::Product.new actor: AbstractReference, work: Proc
+      Finished = Algebrick::Product.new actor: AbstractReference, result: Object, worker: AbstractReference
+      NewWork  = Algebrick::Product.new actor: AbstractReference, work: Proc
+      Message  = Algebrick::Variant.new Work, Finished, NewWork
+
+      include AbstractExecutor
+
+      class WorkStash
+        def initialize
+          @stash = Hash.new { |hash, key| hash[key] = [] }
+        end
+
+        def push(actor, work)
+          @stash[actor].push work
+        end
+
+        def pop(actor)
+          @stash[actor].pop.tap { |work| @stash.delete(actor) if @stash[actor].empty? }
+        end
+
+        def present?(actor)
+          @stash.has_key?(actor)
+        end
+
+        def empty?(actor)
+          !present?(actor)
+        end
+
+        def each
+          @stash.each do |actor, works|
+            yield actor, works
+          end
         end
       end
 
@@ -715,58 +884,69 @@ module Actress
         end
       end
 
-      Work     = Algebrick::Product.new actor: AbstractReference, work: Proc
-      Finished = Algebrick::Product.new actor: AbstractReference, result: Object, worker: AbstractReference
-      NewWork  = Algebrick::Product.new actor: AbstractReference, work: Proc
-      Message  = Algebrick::Variant.new Work, Finished, NewWork
+      class Dispatcher < AbstractActor
+        def initialize(size)
+          super()
+          @size           = size
+          @active_actors  = Set.new
+          @waiting_actors = Set.new
+          @work_stash     = WorkStash.new
+          @free_workers   = Array.new(size) do |i|
+            world.run(name: "worker#{i}", type: Core::Threaded) { Worker.new reference }
+          end
+        end
 
-      include AbstractExecutor
+        def on_message(message)
+          match message,
+                Finished.(~any, _, ~any) --> actor, worker do
+                  @free_workers << worker
+                  @active_actors.delete actor
+                  @waiting_actors.add actor if @work_stash.present?(actor)
 
-      def initialize(size)
-        super()
-        @size           = size
-        @active_actors  = Set.new
-        @waiting_actors = Set.new
-        @work_stash     = WorkStash.new
-        @free_workers   = Array.new(size) do |i|
-          world.run(name: "worker#{i}", type: Core::Threaded) { Worker.new reference }
+                  assign_work
+                end,
+                NewWork.(~any, ~any) --> actor, work do
+                  @waiting_actors.add actor
+                  @work_stash.push actor, work
+
+                  assign_work
+                end
+        end
+
+        private
+
+        def assign_work
+          while worker_available? && !@waiting_actors.empty?
+            @active_actors.add(actor = @waiting_actors.shift)
+            @free_workers.pop.tell Work[actor, @work_stash.pop(actor)]
+          end
+        end
+
+        def worker_available?
+          not @free_workers.empty?
         end
       end
 
-      def on_message(message)
-        match message,
-              Finished.(~any, _, ~any) --> actor, worker do
-                @free_workers << worker
-                @active_actors.delete actor
-                @waiting_actors.add actor if @work_stash.present?(actor)
+      attr_reader :pool_size
 
-                assign_work
-              end,
-              NewWork.(~any, ~any) --> actor, work do
-                @waiting_actors.add actor
-                @work_stash.push actor, work
-
-                assign_work
-              end
-      end
-
-      private
-
-      def assign_work
-        if worker_available? && !@waiting_actors.empty?
-          @active_actors.add(actor = @waiting_actors.shift)
-          @free_workers.pop.tell Work[actor, @work_stash.pop(actor)]
+      def initialize(world)
+        @pool_size  = world.pool_size
+        @dispatcher = world.spawn(name: 'shared_executor', type: Core::Threaded) do
+          Dispatcher.new world.pool_size
         end
       end
 
-      def worker_available?
-        not @free_workers.empty?
+      def execute(actor, &work)
+        @dispatcher.tell SharedExecutor::NewWork[actor, work]
+      end
+
+      def terminate(actor)
       end
     end
 
     include Algebrick::TypeCheck
 
-    attr_reader :pool_size, :threaded_executor, :shared_executor,
+    attr_reader :pool_size, :threaded_executor, :shared_executor, :shared_executor2,
                 :root, :user, :system
 
     def initialize(options = {})
@@ -774,9 +954,10 @@ module Actress
       @threaded_executor = ThreadedExecutor.new
       @root              = create_root
       root.core.start.wait
-      @system          = root.ask(:system).value
-      @user            = root.ask(:user).value
-      @shared_executor = system.ask(:shared_executor).value
+      @system           = root.ask(:system).value
+      @user             = root.ask(:user).value
+      @shared_executor  = system.ask(:shared_executor).value
+      @shared_executor2 = system.ask(:shared_executor2).value
       #@logger             = Reference.new { |ref| system.ask(System::GetLogger.new(ref)) }
     end
 
@@ -807,9 +988,9 @@ module Actress
 #class Abstract
 #  include IsActor
 #
-#  attr_reader :reference, :current_message
+#  attr_reader :reference, :current_letter
 #  alias_method :ref, :reference
-#  private :current_message
+#  private :current_letter
 #
 #  ActorMessage = Actor.define_message :body, :future
 #
@@ -864,7 +1045,7 @@ module Actress
 #    @stopping        = false
 #    @stopped_future  = Future.new
 #    @supervisor      = nil
-#    @current_message = nil
+#    @current_letter = nil
 #  end
 #
 #  def initialize_inside
