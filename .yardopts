@@ -1,9 +1,9 @@
 --protected
 --private
 --verbose
---main=README_FULL.md
+--main=README.md
 --output-dir=./yardoc/
---asset ./doc
+--markup-provider kramdown
 --markup markdown
 --title=Algebrick
 --template default
@@ -11,5 +11,5 @@
 
 ./lib/**/*.rb
 -
-MIT-LICENSE
+LICENSE.txt
 README.md

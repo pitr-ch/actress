@@ -1,12 +1,9 @@
 ## Actress
 
-_still only a gem prototype_
+_still only a prototype_
 
-Actress is a library providing Actors. Behaviour is similar to Akka.
+**Actor model library.**
 
-### Why?
-
-This lib implements both actors tied to threads and actors running on thread pool. A developer can easily spawn 100_000 actors
-with actress. This is not possible with Celluloid or Rubinius actors. A machine would run out of memory because those libs are 
-spawning thread for each actor.
-
+Provides Future and Actors. Actors are sharing Thread pool so
+as many actors as you need can be spawned.
+(AFAIK This is not possible with other gems like Celluloid).

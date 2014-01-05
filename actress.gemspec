@@ -1,33 +1,35 @@
 Gem::Specification.new do |s|
 
   s.name        = 'actress'
-  s.version     = '0.0.1'
-  s.date        = '2013-03-26'
-  s.summary     = 'Simple Actor library'
-  s.description = <<-TEXT
-    Provides Future and Actors. Actors can have dedicated thread (Actor::Threaded) or they can share
-    thread pool (Actor::Shared). You can create as many shared actors as you need
-    (this is not supported by other libs like Celluloid).
+  s.version     = File.read(File.join(File.dirname(__FILE__), 'VERSION'))
+  s.date        = '2013-07-18'
+  s.summary     = 'Actor model library'
+  s.description = <<-TEXT.gsub(/^ +|/, '')
+    |Provides Future and Actors. Actors are sharing Thread pool so
+    |as many actors as you need can be spawned.
+    |(AFAIK This is not possible with other gems like Celluloid).
   TEXT
   s.authors          = ['Petr Chalupa']
   s.email            = 'git@pitr.ch'
   s.homepage         = 'https://github.com/pitr-ch/actress'
-  s.extra_rdoc_files = %w(MIT-LICENSE)
+  s.extra_rdoc_files = %w(LICENSE.txt README.md)
   s.files            = Dir['lib/actress.rb']
   s.require_paths    = %w(lib)
   s.test_files       = Dir['spec/actress.rb']
+  s.license          = 'Apache License 2.0'
 
-  { 'logging'   => nil,
-    'algebrick' => nil
+  { 'algebrick' => '~> 0.4.0',
+    'justified' => nil
   }.each do |gem, version|
     s.add_runtime_dependency(gem, [version || '>= 0'])
   end
 
-  { 'minitest' => '< 5',
-    'turn'     => nil,
-    'pry'      => nil,
-    'yard'     => nil,
-    'kramdown' => nil,
+  { 'minitest'           => nil,
+    'minitest-reporters' => nil,
+    'turn'               => nil,
+    'pry'                => nil,
+    'yard'               => nil,
+    'kramdown'           => nil,
   }.each do |gem, version|
     s.add_development_dependency(gem, [version || '>= 0'])
   end
