@@ -7,7 +7,6 @@ Gem::Specification.new do |s|
   s.description = <<-TEXT.gsub(/^ +|/, '')
     |Provides Future and Actors. Actors are sharing Thread pool so
     |as many actors as you need can be spawned.
-    |(AFAIK This is not possible with other gems like Celluloid).
   TEXT
   s.authors          = ['Petr Chalupa']
   s.email            = 'git@pitr.ch'
@@ -19,7 +18,8 @@ Gem::Specification.new do |s|
   s.license          = 'Apache License 2.0'
 
   { 'algebrick' => '~> 0.4.0',
-    'justified' => nil
+    'justified' => nil,
+    'atomic'    => nil
   }.each do |gem, version|
     s.add_runtime_dependency(gem, [version || '>= 0'])
   end
@@ -29,7 +29,7 @@ Gem::Specification.new do |s|
     'turn'               => nil,
     'pry'                => nil,
     'yard'               => nil,
-    'kramdown'           => nil,
+    'kramdown'           => nil
   }.each do |gem, version|
     s.add_development_dependency(gem, [version || '>= 0'])
   end

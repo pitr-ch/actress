@@ -1,0 +1,140 @@
+#  Copyright 2013 Petr Chalupa <git+actress@pitr.ch>
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+
+module Actress
+  class Clock < MicroActor
+    include Algebrick::Types
+
+    Tick  = Algebrick.atom
+    Timer = Algebrick.type do
+      fields! who:   Object, # to ping back
+              when:  Time, # to deliver
+              what:  Maybe[Object], # to send
+              where: Symbol # it should be delivered, which method
+    end
+
+    module Timer
+      def self.[](*fields)
+        super(*fields).tap { |v| Match! v.who, -> who { who.respond_to? v.where } }
+      end
+
+      include Comparable
+
+      def <=>(other)
+        Type! other, self.class
+        self.when <=> other.when
+      end
+
+      def apply
+        if Algebrick::Some[Object] === what
+          who.send where, what.value
+        else
+          who.send where
+        end
+      end
+    end
+
+    Pills = Algebrick.type do
+      variants NoPill = atom,
+               Took   = atom,
+               Pill   = type { fields Float }
+    end
+
+    def ping(who, time, with_what = nil, where = :<<)
+      Type! time, Time, Numeric
+      time  = Time.now + time if time.is_a? Numeric
+      timer = Timer[who, time, with_what.nil? ? None : Some[Object][with_what], where]
+      if terminated?
+        Thread.new do
+          sleep [timer.when - Time.now, 0].max
+          timer.apply
+        end
+      else
+        self << timer
+      end
+    end
+
+    private
+
+    def delayed_initialize
+      @timers        = SortedSet.new
+      @sleep_barrier = Mutex.new
+      @sleeper       = Thread.new { sleeping }
+      Thread.pass until @sleep_barrier.synchronize { @sleeping_pill == NoPill }
+    end
+
+    def termination
+      @sleeper.kill
+      super
+    end
+
+    def on_message(message)
+      match message,
+            Tick >-> do
+              run_ready_timers
+              sleep_to first_timer
+            end,
+            ~Timer >-> timer do
+              @timers.add timer
+              if @timers.size == 1
+                sleep_to timer
+              else
+                wakeup if timer == first_timer
+              end
+            end
+    end
+
+    def run_ready_timers
+      while first_timer && first_timer.when <= Time.now
+        first_timer.apply
+        @timers.delete(first_timer)
+      end
+    end
+
+    def first_timer
+      @timers.first
+    end
+
+    def wakeup
+      while @sleep_barrier.synchronize { Pill === @sleeping_pill }
+        Thread.pass
+      end
+      @sleep_barrier.synchronize do
+        @sleeper.wakeup if Took === @sleeping_pill
+      end
+    end
+
+    def sleep_to(timer)
+      return unless timer
+      sec = [timer.when - Time.now, 0.0].max
+      @sleep_barrier.synchronize do
+        @sleeping_pill = Pill[sec]
+        @sleeper.wakeup
+      end
+    end
+
+    def sleeping
+      @sleep_barrier.synchronize do
+        loop do
+          @sleeping_pill = NoPill
+          @sleep_barrier.sleep
+          pill           = @sleeping_pill
+          @sleeping_pill = Took
+          @sleep_barrier.sleep pill.value
+          self << Tick
+        end
+      end
+    end
+  end
+end
