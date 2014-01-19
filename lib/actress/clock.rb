@@ -16,13 +16,14 @@ module Actress
   class Clock < MicroActor
     include Algebrick::Types
 
-    Tick  = Algebrick.atom
-    Timer = Algebrick.type do
+    Tick   = Algebrick.atom
+    Timer  = Algebrick.type do
       fields! who:   Object, # to ping back
               when:  Time, # to deliver
               what:  Maybe[Object], # to send
               where: Symbol # it should be delivered, which method
     end
+    Remove = Algebrick.type { fields! timer: Timer }
 
     module Timer
       def self.[](*fields)
@@ -63,9 +64,22 @@ module Actress
       else
         self << timer
       end
+      return timer
+    end
+
+    def expire(timer)
+      if terminated?
+        raise NotImplementedError
+      else
+        self << Remove[timer]
+      end
     end
 
     private
+
+    def initialize(logger)
+      super logger, self
+    end
 
     def delayed_initialize
       @timers        = SortedSet.new
@@ -81,18 +95,21 @@ module Actress
 
     def on_message(message)
       match message,
-            Tick >-> do
+            (on Tick do
               run_ready_timers
               sleep_to first_timer
-            end,
-            ~Timer >-> timer do
+            end),
+            (on Remove.(~any) do |timer|
+              @timers.delete timer
+            end),
+            (on ~Timer do |timer|
               @timers.add timer
               if @timers.size == 1
                 sleep_to timer
               else
                 wakeup if timer == first_timer
               end
-            end
+            end)
     end
 
     def run_ready_timers

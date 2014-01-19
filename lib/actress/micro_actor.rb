@@ -19,13 +19,14 @@ module Actress
 
     Terminate = Algebrick.type { fields! future: Future }
 
-    def initialize(logger, *args)
-      initialized = Future.new
+    def initialize(logger, clock, *args)
+      initialized = Future.new(clock)
 
       @thread = Thread.new do
         Thread.current.abort_on_exception = true
 
         @logger     = logger
+        @clock      = Type! clock, Clock
         @terminated = nil
         @mailbox    = Queue.new
 
