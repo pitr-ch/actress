@@ -24,8 +24,8 @@ module Actress
       @pool_size        = Atomic.new 0
       @clock            = Clock.new logging['clock']
       @executor         = (options[:non_optimized] ? SharedExecutor::Dispatcher : SharedExecutorOptimized::Dispatcher).
-          new(logging['executor'], logging, @clock, @pool_size,
-              Type!(options[:pool_size] || 10, Integer))
+          new(logging['executor'], @clock,
+              logging, @pool_size, Type!(options[:pool_size] || 10, Integer))
       @reserved_manager = ReservedManager.new @executor, @clock
       @root             = create_root
     end
@@ -40,12 +40,16 @@ module Actress
     end
 
     def terminate
-      @executor << MicroActor::Terminate[terminate = Future.new]
+      @executor << MicroActor::Terminate[terminate = future]
       terminate.wait
     end
 
     def reserve_thread(reference)
       @reserved_manager.reserve reference
+    end
+
+    def future
+      Future.new(clock)
     end
 
     private

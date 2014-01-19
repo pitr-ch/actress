@@ -30,10 +30,9 @@ module Actress
     class Dispatcher < MicroActor
       include Executor
 
-      def delayed_initialize(logging, clock, pool_size, start_size)
+      def delayed_initialize(logging, pool_size, start_size)
         @size           = Type! pool_size, Atomic
         @scale_down     = 0
-        @clock          = Type! clock, Clock
         @active_actors  = Set.new
         @waiting_actors = Set.new
         @work_queue     = WorkQueue.new
@@ -97,7 +96,7 @@ module Actress
       end
 
       def remove_worker(worker)
-        worker << Terminate[Future.new]
+        worker << Terminate[Future.new(@clock)]
         @scale_down -= 1
         @size.update { |v| v - 1 }
         @logger.info "scale down to #{@size.get}"
@@ -105,7 +104,7 @@ module Actress
 
       def create_worker
         name = format('%s-%3d', Worker, @size.update { |v| v + 1 })
-        @free_workers << w = Worker.new(@logging[name], self)
+        @free_workers << w = Worker.new(@logging[name], @clock, self)
         @logger.info "scale up to #{@size.get}"
       end
 

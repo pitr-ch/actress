@@ -53,7 +53,7 @@ end
 
 Benchmark.bmbm(10) do |b|
   b.report('actress') do
-    counts = Array.new(COUNTS_SIZE) { [0, Actress::Future.new] }
+    counts = Array.new(COUNTS_SIZE) { [0, world.future] }
 
     counters = Array.new(COUNTERS_SIZE) do |i|
       world.spawn(Actress::BlockActress, "counter#{i}") do |count, future|
@@ -75,7 +75,7 @@ Benchmark.bmbm(10) do |b|
   end
   b.report('celluloid') do
     counts = []
-    COUNTS_SIZE.times { counts << [0, Actress::Future.new] }
+    COUNTS_SIZE.times { counts << [0, world.future] }
 
     counters = []
     COUNTERS_SIZE.times do |i|

@@ -35,7 +35,7 @@ module Actress
       message message, nil
     end
 
-    def ask(message, future = Future.new)
+    def ask(message, future = Future.new(core.world.clock))
       message message, future
     end
 

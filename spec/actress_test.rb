@@ -70,7 +70,7 @@ describe 'actress' do
   it 'pings complex' do
     compute =-> do
       count_to = 10
-      counts   = Array.new(10) { [0, Actress::Future.new] }
+      counts   = Array.new(10) { [0, world.future] }
 
       counters = Array.new(counters_size = 30) do |i|
         world.spawn(Actress::BlockActress, "counter#{i}") do |count, future|
@@ -145,9 +145,9 @@ describe 'actress' do
 
   it 'no nil' do
     100.times do
-      a = DoNothing.new world.logging['nothing']
+      a = DoNothing.new world.logging['nothing'], world.clock
       a << 'm'
-      a << DoNothing::Terminate[f = Actress::Future.new]
+      a << DoNothing::Terminate[f = world.future]
       f.wait
     end
   end

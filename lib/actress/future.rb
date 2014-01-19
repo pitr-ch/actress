@@ -13,12 +13,12 @@
 #  limitations under the License.
 
 module Actress
-  class FutureAlreadySet < StandardError
-  end
-
-  # TODO replace mutexes with Atoms?
-  # TODO timeouts
   class Future
+    Error            = Class.new StandardError
+    FutureAlreadySet = Class.new Error
+    FutureFailed     = Class.new Error
+    TimeOut          = Class.new Error
+
     # `#future` will become resolved to `true` when ``#countdown!`` is called `count` times
     class CountDownLatch
       attr_reader :future
@@ -54,23 +54,24 @@ module Actress
       result
     end
 
-    def initialize(&task)
+    def initialize(clock)
       @lock     = Mutex.new
+      @clock    = clock
       @value    = nil
       @resolved = false
       @failed   = false
       @waiting  = []
       @tasks    = []
-      do_then &task if task
+      @timers   = []
     end
 
-    def value
-      wait
+    def value(timeout = nil)
+      wait timeout
       @lock.synchronize { @value }
     end
 
-    def value!
-      value.tap { raise value if failed? }
+    def value!(timeout = nil)
+      value(timeout).tap { raise value if failed? }
     end
 
     def resolve(result)
@@ -78,14 +79,22 @@ module Actress
     end
 
     def fail(exception)
-      Type! exception, Exception
+      Type! exception, Exception, String
+      if exception.is_a? String
+        exception = FutureFailed.new(exception).tap { |e| e.set_backtrace caller }
+      end
       set exception, true
     end
 
     def evaluate_to(&block)
-      set block.call, false
+      resolve block.call
     rescue => error
-      set error, true
+      fail error
+    end
+
+    def evaluate_to!(&block)
+      evaluate_to &block
+      raise value if self.failed?
     end
 
     def do_then(&task)
@@ -106,24 +115,20 @@ module Actress
           @resolved = true
         end
         @value = value
-        while (thread = @waiting.pop)
-          begin
-            thread.wakeup
-          rescue ThreadError
-            retry
-          end
-        end
-        !failed
+        wakeup_threads
+        expire_timers
       end
       @tasks.each { |t| t.call self, value }
       self
     end
 
-    def wait
+    def wait(timeout = nil)
       @lock.synchronize do
         unless _ready?
           @waiting << Thread.current
+          @timers << @clock.ping(self, timeout, Thread.current, :expired) if timeout
           @lock.sleep
+          raise TimeOut unless _ready?
         end
       end
       self
@@ -145,10 +150,33 @@ module Actress
       do_then { |v| future.set v, failed? }
     end
 
+    # @api private
+    def expired(thread)
+      @lock.synchronize do
+        thread.wakeup if @waiting.delete(thread)
+      end
+    end
+
     private
 
     def _ready?
       @resolved || @failed
+    end
+
+    def wakeup_threads
+      while (thread = @waiting.pop)
+        begin
+          thread.wakeup
+        rescue ThreadError
+          retry
+        end
+      end
+    end
+
+    def expire_timers
+      while (timer = @timers.pop)
+        @clock.expire timer
+      end
     end
   end
 end

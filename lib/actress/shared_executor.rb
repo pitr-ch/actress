@@ -37,10 +37,9 @@ module Actress
     class Dispatcher < MicroActor
       include Executor
 
-      def delayed_initialize(logging, clock, pool_size, start_size)
+      def delayed_initialize(logging, pool_size, start_size)
         @size           = Type! pool_size, Atomic
         @scale_down     = 0
-        @clock          = Type! clock, Clock
         @active_actors  = Set.new
         @waiting_actors = Set.new
         @work_queue     = WorkQueue.new
