@@ -19,7 +19,8 @@ Gem::Specification.new do |s|
 
   { 'algebrick' => '~> 0.4.0',
     'justified' => nil,
-    'atomic'    => nil
+    'atomic'    => nil,
+    'hitimes'   => nil
   }.each do |gem, version|
     s.add_runtime_dependency(gem, [version || '>= 0'])
   end

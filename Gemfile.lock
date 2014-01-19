@@ -4,6 +4,7 @@ PATH
     actress (0.0.1)
       algebrick (~> 0.4.0)
       atomic
+      hitimes
       justified
 
 GEM
@@ -17,6 +18,7 @@ GEM
     coderay (1.1.0)
     ffi (1.9.3-java)
     hashie (2.0.5)
+    hitimes (1.2.1)
     justified (0.0.4)
     kramdown (1.3.1)
     method_source (0.8.2)

@@ -12,6 +12,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+require 'hitimes'
+
 module Actress
   class Clock < MicroActor
     include Algebrick::Types
@@ -19,7 +21,7 @@ module Actress
     Tick   = Algebrick.atom
     Timer  = Algebrick.type do
       fields! who:   Object, # to ping back
-              when:  Time, # to deliver
+              when:  Numeric, # to deliver
               what:  Maybe[Object], # to send
               where: Symbol # it should be delivered, which method
     end
@@ -44,6 +46,10 @@ module Actress
           who.send where
         end
       end
+
+      def time
+        Time.at Time.now.to_f + self.when - Clock.run_time
+      end
     end
 
     Pills = Algebrick.type do
@@ -52,13 +58,21 @@ module Actress
                Pill   = type { fields Float }
     end
 
+    @run_time_interval ||= Hitimes::Interval.now
+    def self.run_time
+      @run_time_interval.to_f
+    end
+
+    def self.inherited(base)
+      raise 'unsupported @run_time_interval is not delegated'
+    end
+
     def ping(who, time, with_what = nil, where = :<<)
-      Type! time, Time, Numeric
-      time  = Time.now + time if time.is_a? Numeric
-      timer = Timer[who, time, with_what.nil? ? None : Some[Object][with_what], where]
+      Type! time, Numeric
+      timer = Timer[who, run_time + time, with_what.nil? ? None : Some[Object][with_what], where]
       if terminated?
         Thread.new do
-          sleep [timer.when - Time.now, 0].max
+          sleep [timer.when - run_time, 0].max
           timer.apply
         end
       else
@@ -76,6 +90,10 @@ module Actress
     end
 
     private
+
+    def run_time
+      self.class.run_time
+    end
 
     def initialize(logger)
       super logger, self
@@ -113,7 +131,7 @@ module Actress
     end
 
     def run_ready_timers
-      while first_timer && first_timer.when <= Time.now
+      while first_timer && first_timer.when <= run_time
         first_timer.apply
         @timers.delete(first_timer)
       end
@@ -134,7 +152,7 @@ module Actress
 
     def sleep_to(timer)
       return unless timer
-      sec = [timer.when - Time.now, 0.0].max
+      sec = [timer.when - run_time, 0.0].max
       @sleep_barrier.synchronize do
         @sleeping_pill = Pill[sec]
         @sleeper.wakeup
