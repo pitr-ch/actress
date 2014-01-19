@@ -56,7 +56,7 @@ module Actress
 
     def initialize(clock)
       @lock     = Mutex.new
-      @clock    = clock
+      @clock    = Type! clock, Clock
       @value    = nil
       @resolved = false
       @failed   = false

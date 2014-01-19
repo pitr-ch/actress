@@ -20,6 +20,7 @@ module Actress
     Terminate = Algebrick.type { fields! future: Future }
 
     def initialize(logger, clock, *args)
+      @mailbox    = Queue.new
       initialized = Future.new(clock)
 
       @thread = Thread.new do
@@ -28,7 +29,6 @@ module Actress
         @logger     = logger
         @clock      = Type! clock, Clock
         @terminated = nil
-        @mailbox    = Queue.new
 
         delayed_initialize(*args)
         initialized.resolve true

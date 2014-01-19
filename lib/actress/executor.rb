@@ -14,7 +14,7 @@
 
 module Actress
   module Executor
-    def execute(actor, &work)
+    def execute(actor, *args)
       raise NotImplementedError
     end
 

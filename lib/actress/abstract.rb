@@ -47,10 +47,10 @@ module Actress
     end
 
     def on_envelope(envelope)
-      Type! envelope, Envelope
-      with_envelope envelope do
-        on_message envelope.message
-      end
+      @envelope = envelope
+      on_message envelope.message
+    ensure
+      @envelope = nil
     end
 
     def spawn(actress_class, name, *args, &block)
@@ -69,13 +69,6 @@ module Actress
 
     def envelope
       @envelope or raise 'called outside with_envelope'
-    end
-
-    def with_envelope(envelope)
-      @envelope = envelope
-      yield
-    ensure
-      @envelope = nil
     end
   end
 end

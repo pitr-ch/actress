@@ -23,7 +23,7 @@ module Actress
       end
 
       def on_message(message)
-        @dispatcher << [message[0], message[1].call, self]
+        @dispatcher << [message[0], message[0].__execute(*message[1]), self]
       end
     end
 
@@ -43,8 +43,8 @@ module Actress
         start_size.times { create_worker }
       end
 
-      def execute(actor, &work)
-        self << [actor, work]
+      def execute(actor, *args)
+        self << [actor, args]
       end
 
       private

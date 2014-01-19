@@ -40,9 +40,9 @@ module Actress
     end
 
     def message(message, future = nil)
-      core.on_envelope Envelope[message,
-                                future ? Some[Future][future] : None,
-                                Actress.current ? Some[Reference][Actress.current] : None]
+      core.__on_envelope Envelope[message,
+                                  future ? Some[Future][future] : None,
+                                  Actress.current ? Some[Reference][Actress.current] : None]
       return future || self
     end
 

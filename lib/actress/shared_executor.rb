@@ -15,8 +15,8 @@
 module Actress
   module SharedExecutor
     Message = Algebrick.type do
-      variants Work         = type { fields actor: Reference, work: Proc },
-               Finished     = type { fields actor: Reference, result: Object, worker: MicroActor },
+      variants Work         = type { fields actor: Core, args: Array },
+               Finished     = type { fields actor: Core, result: Object, worker: MicroActor },
                AddThread    = atom,
                RemoveThread = atom
     end
@@ -28,8 +28,8 @@ module Actress
 
       def on_message(message)
         match message,
-              Work.(~any, ~any) >-> actor, work do
-                @dispatcher << Finished[actor, work.call, self]
+              Work.(~any, ~any) >-> actor, args do
+                @dispatcher << Finished[actor, actor.__execute(*args), self]
               end
       end
     end
@@ -50,8 +50,8 @@ module Actress
         start_size.times { create_worker }
       end
 
-      def execute(actor, &work)
-        self << Work[actor, work]
+      def execute(actor, *args)
+        self << Work[actor, args]
       end
 
       private
@@ -106,7 +106,7 @@ module Actress
       end
 
       def remove_worker(worker)
-        worker << Terminate[Future.new]
+        worker << Terminate[Future.new(@clock)]
         @scale_down -= 1
         @size.update { |v| v - 1 }
         @logger.info "scale down to #{@size.get}"
@@ -114,7 +114,7 @@ module Actress
 
       def create_worker
         name = format('%s-%3d', Worker, @size.update { |v| v + 1 })
-        @free_workers << w = Worker.new(@logging[name], self)
+        @free_workers << w = Worker.new(@logging[name], @clock, self)
         @logger.info "scale up to #{@size.get}"
       end
 

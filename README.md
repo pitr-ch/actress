@@ -39,4 +39,4 @@ p results.map(&:value) # => [3,1]
 world.terminate
 ```
 
-This is version 0.0.1 please treat it as such :)
+This is still only version 0.0.x please keep that in mind when something breaks ;)
