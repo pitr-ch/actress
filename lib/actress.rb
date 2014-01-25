@@ -36,6 +36,7 @@ module Actress
   end
 
   require 'actress/future'
+  require 'actress/count_down_latch'
   require 'actress/reference'
   require 'actress/envelope'
   require 'actress/micro_actor'

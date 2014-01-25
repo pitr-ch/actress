@@ -19,33 +19,11 @@ module Actress
     FutureFailed     = Class.new Error
     TimeOut          = Class.new Error
 
-    # `#future` will become resolved to `true` when ``#countdown!`` is called `count` times
-    class CountDownLatch
-      attr_reader :future
-
-      def initialize(count, future = Future.new)
-        raise ArgumentError if count < 0
-        @count  = count
-        @lock   = Mutex.new
-        @future = future
-      end
-
-      def countdown!
-        @lock.synchronize do
-          @count -= 1 if @count > 0
-          @future.resolve true if @count == 0 && !@future.ready?
-        end
-      end
-
-      def count
-        @lock.synchronize { @count }
-      end
-    end
-
     include Algebrick::TypeCheck
     extend Algebrick::TypeCheck
 
-    def self.join(futures, result = Future.new)
+    def self.join(futures, result = nil)
+      result    ||= Future.new(futures.first.clock)
       countdown = CountDownLatch.new(futures.size, result)
       futures.each do |future|
         Type! future, Future
