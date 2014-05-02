@@ -1,10 +1,14 @@
-## Actress
+# Actress
 
 **Actor model library.**
 
 Provides Future and Actors. Actors are sharing Thread pool so
-as many actors as you need can be spawned.
-_(AFAIK This is not possible with other gems like Celluloid)._
+as many actors as needed can be spawned allowing to better structure
+your code without caring about number of threads or recycling of actors.
+Architecture inspired by Erlang and Akka.
+_(AFAIK This is not possible with any other gem providing Actor model.)_
+
+## Quick peak
 
 ```ruby
 require 'actress'
@@ -29,7 +33,7 @@ class Counter < Actress::Abstract
 end
 
 world   = Actress::World.new
-counter = world.spawn Counter, 'conter'
+counter = world.spawn Counter, 'counter'
 
 operations = [Plus[1, 2],
               Subtract[2, 1]]
@@ -38,5 +42,7 @@ p results.map(&:value) # => [3,1]
 
 world.terminate
 ```
+
+## Note
 
 This is still only version 0.0.x please keep that in mind when something breaks ;)
