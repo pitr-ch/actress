@@ -12,6 +12,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+warn 'Actress gem was merged into concurrent-ruby, see:http://concurrent-ruby.com. It\'s no longer maintained.'
+
 require 'thread'
 require 'set'
 require 'logger'

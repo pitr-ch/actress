@@ -1,3 +1,5 @@
+**NOTE:** Actress gem was merged into [concurrent-ruby](concurrent-ruby.com). It's no longer maintained.
+
 # Actress
 
 **Actor model library.**
