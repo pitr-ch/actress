@@ -1,4 +1,4 @@
-**NOTE:** Actress gem was merged into [concurrent-ruby](concurrent-ruby.com). It's no longer maintained.
+**NOTE:** Actress gem was merged into [concurrent-ruby](http://concurrent-ruby.com). It's no longer maintained.
 
 # Actress
 
